@@ -1,0 +1,14 @@
+* { box-sizing: border-box }
+html, body { margin: 0; width: 100%; height: 100%; background: #16132e; color: #fff; font: 17px system-ui; overscroll-behavior: none }
+body { overflow: hidden }
+canvas { display: block; touch-action: none; outline: none }
+main { position: fixed; inset: 0; display: grid; place-content: center; justify-items: start; padding: max(24px, env(safe-area-inset-left)); background: radial-gradient(ellipse at 20% 15%, #473567, #16132e 68%) }
+main[hidden], [hidden] { display: none }
+h1 { font: bold clamp(42px, 12vw, 94px)/1 monospace; margin: 0; color: #55e7cc; text-shadow: 4px 4px #682d65 }
+p { max-width: 32rem }
+.tag { color: #ffe073; letter-spacing: .20em }
+button { color: #16132e; background: #55e7cc; font: bold 1rem monospace; border: 2px solid #16132e; padding: .8rem 1.2rem; cursor: pointer }
+button:focus-visible { outline: 3px solid #ffe073 }
+small { color: #c9bedf }
+progress { width: 100%; accent-color: #55e7cc }
+#fullscreen { position: fixed; right: max(8px, env(safe-area-inset-right)); top: max(8px, env(safe-area-inset-top)); padding: .3rem }
