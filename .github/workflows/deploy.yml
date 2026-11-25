@@ -1,0 +1,73 @@
+name: FogonuHero Web
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      GODOT_VERSION: '4.5.1'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Install Godot and Web template
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
+          tag="Godot_v${GODOT_VERSION}-stable"
+          curl -fsSL --retry 3 "$base/${tag}_linux.x86_64.zip" -o "$RUNNER_TEMP/godot.zip"
+          curl -fsSL --retry 3 "$base/${tag}_export_templates.tpz" -o "$RUNNER_TEMP/templates.tpz"
+          mkdir -p "$RUNNER_TEMP/godot-bin" "$HOME/.local/share/godot/export_templates/$GODOT_VERSION.stable"
+          unzip -j "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot-bin"
+          mv "$RUNNER_TEMP/godot-bin/${tag}_linux.x86_64" "$RUNNER_TEMP/godot-bin/godot"
+          unzip -j "$RUNNER_TEMP/templates.tpz" templates/web_nothreads_release.zip -d "$HOME/.local/share/godot/export_templates/$GODOT_VERSION.stable"
+          echo "$RUNNER_TEMP/godot-bin" >> "$GITHUB_PATH"
+      - name: Test
+        run: |
+          python3 -m unittest discover -s tools
+          godot --headless --path game --editor --import --quit
+          godot --headless --path game --script res://tests/suite.gd
+      - name: Export and verify
+        run: bash tools/build_web.sh
+      - name: Browser smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/browser" --no-audit --no-fund playwright@1.65.1
+          "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install --with-deps chromium
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory build &
+          server=$!
+          trap 'kill "$server"' EXIT
+          for attempt in {1..20}; do
+            if curl -fsS http://127.0.0.1:8765/ -o /dev/null; then break; fi
+            sleep 1
+          done
+          NODE_PATH="$RUNNER_TEMP/browser/node_modules" FOGO_BROWSER=chromium node tools/browser_test.cjs
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          path: build
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: github-pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+        id: deploy

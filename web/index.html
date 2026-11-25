@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FogonuHero</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<p id="rhythm-status" class="visually-hidden" role="status" aria-label="Ritmo atual"></p>
+<canvas id="canvas" tabindex="0" aria-label="Jogo FogonuHero"></canvas>
+<main id="welcome">
+ <p class="tag">BATERIA DE RUA</p>
+ <h1>FogonuHero</h1>
+ <p id="intro">Treine sua batida em duas pistas ao som de Cortejo de Neon.</p>
+ <button id="start">Iniciar jogo</button>
+ <progress id="progress" hidden></progress>
+ <p id="status" role="status">F e J para tocar · Esc para pausar · Toque no celular</p>
+ <small id="credits">Trilha e sons originais do FogonuHero</small>
+ <a id="review-link" href="__bloco/editor" hidden>Revisar mapas e levadas</a>
+</main>
+<button id="fullscreen" hidden aria-label="Tela cheia">⛶</button>
+<script src="index.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

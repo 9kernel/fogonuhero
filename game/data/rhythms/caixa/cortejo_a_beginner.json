@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "cortejo_a_beginner",
+  "instrument": "caixa",
+  "rhythm": "cortejo_a",
+  "difficulty": "beginner",
+  "time_signature": [
+    4,
+    4
+  ],
+  "loop_beats": 4,
+  "validation_status": "original",
+  "notes": [
+    {
+      "beat": 0,
+      "hand": "left",
+      "accent": true,
+      "velocity": 1
+    },
+    {
+      "beat": 1,
+      "hand": "right",
+      "accent": false,
+      "velocity": 0.65
+    },
+    {
+      "beat": 2,
+      "hand": "left",
+      "accent": false,
+      "velocity": 0.65
+    },
+    {
+      "beat": 3.5,
+      "hand": "right",
+      "accent": false,
+      "velocity": 0.65
+    }
+  ]
+}

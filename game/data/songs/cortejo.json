@@ -1,0 +1,35 @@
+{
+  "id": "cortejo",
+  "title": "Cortejo de Neon",
+  "artist": "FogonuHero",
+  "key_original": "Am",
+  "key_target": "Am",
+  "bpm": 112,
+  "duration": 17.142857142857142,
+  "tempo_map": [
+    {
+      "time": 0,
+      "bpm": 112
+    }
+  ],
+  "audio": "res://assets/cortejo.ogg",
+  "rhythm_sequence": [
+    {
+      "rhythm": "cortejo_a",
+      "start_time": 0
+    },
+    {
+      "rhythm": "cortejo_b",
+      "start_time": 8.571428571428571
+    }
+  ],
+  "instruments": [
+    "caixa"
+  ],
+  "difficulties": [
+    "beginner",
+    "intermediate"
+  ],
+  "validation_status": "original",
+  "license": "CC0-1.0"
+}

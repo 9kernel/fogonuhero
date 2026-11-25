@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "files": {
+    "assets/cortejo.ogg": {
+      "license": "CC0-1.0",
+      "authorized": true,
+      "sha256": "8b0373b2c80d0b71603795a87b329ea939d9d7013f41d60bfb8d550f7a3ed562"
+    },
+    "assets/cortejo_075.ogg": {
+      "license": "CC0-1.0",
+      "authorized": true,
+      "sha256": "8a8ab25f740ded566fae11ce618db7f3fb3a2a1e2c220921472853b392fae106"
+    }
+  },
+  "original_generated_samples": {
+    "license": "CC0-1.0",
+    "authorized": true
+  },
+  "local_reference_media_and_derivatives": {
+    "license": "pending",
+    "authorized": false
+  },
+  "repertoire": {},
+  "patterns": {}
+}

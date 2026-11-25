@@ -1,0 +1,7 @@
+numpy<2
+librosa==0.11.0
+soundfile
+pretty-midi
+basic-pitch[onnx]==0.4.0
+demucs==4.0.1
+mido==1.3.3

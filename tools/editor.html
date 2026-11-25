@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>FogonuHero · Revisão local</title>
+<style>
+body { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; color: #eee; background: #16132e; font: 17px system-ui }
+input, select, button { font: inherit; margin: .3rem }
+input[type=number] { width: 7em }
+video { display: block; width: min(480px, 100%); max-height: 35vh }
+.stroke-observation { display: block; color: #ffe073; margin: .25rem 0 .5rem; }
+#frames { border: 1px solid #635489; padding: 1rem; margin: 1rem 0; }
+#frame-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem }
+#frame-list figure { margin: 0; min-width: 0 }
+#frame-list img { display: block; width: 100%; background: #282348 }
+#frame-list figcaption { font-size: .85rem; margin-top: .35rem }
+#comparison { border: 1px solid #635489; padding: 1rem; margin: 1rem 0; }
+#comparison h2 { margin: 0 0 .5rem; font-size: 1.2rem }
+#comparison video { margin: .5rem 0 }
+canvas { width: 100%; background: #282348; touch-action: none }
+</style>
+<h1>Revisão de mapas</h1>
+<label id="catalog-control" hidden>Música do bloco <select id="catalog-song"><option value="">Escolha uma música</option></select></label>
+<label id="lesson-control" hidden>Vídeo de levada <select id="catalog-lesson"><option value="">Escolha uma referência</option></select></label>
+<label>Análise JSON <input id="analysis" type="file" accept=".json"></label>
+<label>Mapa ou manifesto <input id="map" type="file" accept=".json"></label>
+<label>Referência <input id="media" type="file" accept="audio/*,video/*"></label>
+<video controls playsinline id="player"></video>
+<p>Clique na forma de onda para navegar. Ajuste o início, o fim e a grade para revisar o trecho.</p>
+<label>De (s) <input id="from" type="number" value="0" step=".01"></label>
+<label>Até (s) <input id="to" type="number" value="8" step=".01"></label>
+<label>BPM <input id="bpm" type="number" value="112" min="1"></label>
+<label>Pulsos por loop <input id="loop" type="number" value="4" min=".25" step=".25"></label>
+<label>Compasso <select id="meter"><option>2/4</option><option selected>4/4</option><option>6/8</option><option>12/8</option></select></label>
+<button id="around">Ver arredores do cursor</button>
+<label><input id="snap" type="checkbox"> Ajustar ao pulso estimado</label>
+<label><input id="repeat" type="checkbox"> Repetir trecho</label>
+<canvas id="wave" width="1000" height="160"></canvas>
+<button id="add">Adicionar nota no cursor</button>
+<button id="suggest">Importar ataques do trecho</button>
+<label><input id="approve" type="checkbox"> Revisado e aprovado</label>
+<button id="export">Exportar JSON</button>
+<button id="save-draft" hidden>Salvar rascunho</button>
+<button id="save-review" hidden>Salvar no jogo local</button>
+<p id="status" role="status"></p>
+<details id="suggestions" hidden>
+  <summary>Pontos de escuta sugeridos pela análise</summary>
+  <p>O contraste de ataques ou espectro ajuda a localizar mudanças. Ouça e confira a levada antes de registrar o tempo.</p>
+  <div id="suggestion-list"></div>
+</details>
+<section id="comparison" hidden aria-label="Comparação de levadas">
+  <h2 id="comparison-title"></h2>
+  <label>Vídeo de referência <select id="comparison-video"></select></label>
+  <video controls playsinline preload="metadata" id="reference-player"></video>
+  <button id="listen-song">Ouvir trecho da música</button>
+  <button id="listen-reference">Ouvir levada</button>
+  <button id="hide-comparison">Fechar comparação</button>
+  <p id="comparison-status" role="status"></p>
+</section>
+<section id="frames" hidden aria-label="Quadros da batida">
+  <h2>Quadros da batida</h2>
+  <div id="frame-list"></div>
+  <button id="hide-frames">Fechar quadros</button>
+</section>
+<div id="rows"></div>
+<script>
+const get = id => document.getElementById(id);
+const num = id => Number(get(id).value);
+const player = get('player');
+const canvas = get('wave');
+const ctx = canvas.getContext('2d');
+let analysis = {}, map = {notes: []}, url;
+let lessons = [], compareSequence = -1, referenceStart = 0, referenceEnd = 0;
+let activeLesson = '';
+const reference = get('reference-player');
+const rhythmNames = {ijexa:'Ijexá', samba:'Samba', samba_reggae:'Samba-reggae',
+  baiao_xote:'Baião/Xote', marchinha:'Marchinha', maracatu:'Maracatu', rumba:'Rumba', maculele:'Maculelê'};
+const song = () => Array.isArray(map.rhythm_sequence);
+const pulse = () => 60 / Math.max(1, num('bpm'));
+const values = () => song() ? map.rhythm_sequence : map.notes;
+const point = item => song() ? item.start_time : num('from') + item.beat * pulse();
+const xAt = time => (time - num('from')) * canvas.width / Math.max(.001, num('to') - num('from'));
+const nearestBeat = time => {
+  if (!get('snap').checked || !Array.isArray(analysis.beats) || !analysis.beats.length) return time;
+  const beat = analysis.beats.reduce((best, value) =>
+    Math.abs(value - time) < Math.abs(best - time) ? value : best);
+  return Math.abs(beat - time) <= .25 ? beat : time;
+};
+get('around').onclick = () => {
+  const start = Math.max(0, player.currentTime - 5);
+  get('from').value = start;
+  get('to').value = Math.min(analysis.duration || player.duration || start + 10, start + 10);
+  draw();
+};
+function closeFrames() {
+  get('frames').hidden = true;
+  get('frame-list').replaceChildren();
+}
+
+get('hide-frames').onclick = closeFrames;
+
+function showFrames(note) {
+  const center = point(note);
+  const maximum = Math.max(0, analysis.duration - .05);
+  const panel = get('frame-list');
+  panel.replaceChildren();
+  player.pause();
+  for (const [offset, label] of [[-.12, 'Antes'], [0, 'Ataque'], [.12, 'Depois']]) {
+    const time = Math.max(0, Math.min(center + offset, maximum));
+    const figure = document.createElement('figure');
+    const image = document.createElement('img');
+    const caption = document.createElement('figcaption');
+    image.alt = label + ' da batida';
+    caption.textContent = label + ' · ' + time.toFixed(3) + ' s';
+    image.onerror = () => { caption.textContent = label + ' · quadro indisponível'; };
+    image.src = '/__bloco/levadas/' + encodeURIComponent(activeLesson) + '/quadro?tempo=' + time.toFixed(3);
+    figure.append(image, caption);
+    panel.append(figure);
+  }
+  get('frames').hidden = false;
+  get('frames').scrollIntoView({block:'nearest'});
+}
+
+function closeComparison() {
+  reference.pause();
+  reference.removeAttribute('src');
+  reference.load();
+  compareSequence = -1;
+  get('comparison').hidden = true;
+}
+
+async function compare(index) {
+  if (!song() || !values()[index]) return;
+  compareSequence = index;
+  const rhythm = values()[index].rhythm;
+  const name = value => rhythmNames[value] || value;
+  get('comparison-title').textContent = index === 0 ? name(rhythm) :
+    name(values()[index - 1].rhythm) + ' → ' + name(rhythm);
+  const choices = lessons.filter(item => item.rhythm === rhythm)
+    .sort((a, b) => Number(b.instrument === 'caixa') - Number(a.instrument === 'caixa') ||
+      Number(b.status === 'approved') - Number(a.status === 'approved') || a.title.localeCompare(b.title));
+  const select = get('comparison-video');
+  select.replaceChildren(...choices.map(item => new Option(item.title, item.id)));
+  get('comparison').hidden = false;
+  await select.onchange();
+  get('comparison').scrollIntoView({block:'nearest'});
+}
+
+get('comparison-video').onchange = async () => {
+  const select = get('comparison-video');
+  const id = select.value;
+  const description = get('comparison-status');
+  get('listen-reference').disabled = true;
+  reference.pause();
+  if (!id) {
+    reference.removeAttribute('src');
+    reference.load();
+    description.textContent = 'Referência indisponível para esta levada.';
+    return;
+  }
+  try {
+    const response = await fetch('/__bloco/levadas/' + encodeURIComponent(id));
+    if (!response.ok) throw new Error('Referência indisponível.');
+    const bundle = await response.json();
+    if (select.value !== id || compareSequence < 0) return;
+    const pattern = bundle.manifest;
+    referenceStart = pattern.reference_start_time ?? 0;
+    referenceEnd = Math.min(bundle.analysis.duration, referenceStart +
+      (pattern.loop_beats || 4) * 60 / Math.max(1, pattern.reference_bpm || bundle.analysis.bpm || 112));
+    reference.src = bundle.audio;
+    description.textContent = 'Trecho da referência em ' + referenceStart.toFixed(2) + ' s';
+    get('listen-reference').disabled = false;
+  } catch (error) { description.textContent = error.message; }
+};
+get('hide-comparison').onclick = closeComparison;
+get('listen-reference').onclick = async () => {
+  player.pause();
+  try {
+    reference.currentTime = referenceStart;
+    await reference.play();
+  } catch { get('comparison-status').textContent = 'Use os controles do vídeo para iniciar a reprodução.'; }
+};
+reference.ontimeupdate = () => {
+  if (!reference.paused && reference.currentTime >= referenceEnd) reference.pause();
+};
+get('listen-song').onclick = async () => {
+  if (compareSequence < 0) return;
+  reference.pause();
+  const center = values()[compareSequence].start_time ?? player.currentTime;
+  player.currentTime = Math.max(0, center - 2);
+  try { await player.play(); }
+  catch { get('comparison-status').textContent = 'Use os controles da música para iniciar a reprodução.'; }
+};
+
+const draw = () => {
+  for (const label of get('rows').querySelectorAll('.stroke-observation')) {
+    const time = point(values()[Number(label.dataset.note)]);
+    const suggestion = (analysis.stroke_observations || [])
+      .find(observation => Math.abs(observation.time - time) < .03);
+    label.hidden = !suggestion;
+    label.textContent = suggestion ?
+      'Indício visual: ' + (suggestion.hand === 'left' ? 'mão esquerda' : 'mão direita') : '';
+    label.title = suggestion?.detail || '';
+  }
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const range = num('to') - num('from');
+  if (!(range > 0)) return;
+  const waveform = analysis.waveform || [];
+  for (let x = 0; x < canvas.width; x++) {
+    const t = num('from') + x * range / canvas.width;
+    const peak = waveform[Math.floor(t / analysis.duration * waveform.length)] || 0;
+    ctx.fillStyle = '#8c78b7';
+    ctx.fillRect(x, 80 - peak * 77, 1, peak * 154);
+  }
+  ctx.fillStyle = '#55e7cc';
+  if (song() && analysis.beats?.length) {
+    for (const beat of analysis.beats) {
+      if (beat >= num('from') && beat <= num('to')) ctx.fillRect(xAt(beat), 0, 2, 38);
+    }
+  } else {
+    for (let i = 0; i < Math.min(4000, range / pulse() * 4); i++) {
+      ctx.fillRect(xAt(num('from') + pulse() * i / 4), 0, i % 4 ? 1 : 2, i % 4 ? 18 : 38);
+    }
+  }
+  if (song()) {
+    ctx.fillStyle = '#93baff';
+    for (const candidate of analysis.transition_suggestions || []) {
+      if (candidate.time >= num('from') && candidate.time <= num('to'))
+        ctx.fillRect(xAt(candidate.time), 43, 2, 27);
+    }
+  }
+  for (const event of values()) {
+    if (point(event) == null) continue;
+    ctx.fillStyle = '#f775ae';
+    ctx.fillRect(xAt(point(event)), 35, 2, 125);
+  }
+  ctx.fillStyle = '#ffe073';
+  ctx.fillRect(xAt(player.currentTime), 0, 2, 160);
+};
+const field = (type, value, options, update) => {
+  let control = document.createElement(options ? 'select' : 'input');
+  if (options) options.forEach(option => control.add(new Option(option, option)));
+  else { control.type = type; control.step = '.001'; }
+  control.value = value ?? '';
+  control.addEventListener('change', () => { update(control.value); draw(); });
+  return control;
+};
+function rows() {
+  get('rows').replaceChildren();
+  get('add').hidden = get('suggest').hidden = song();
+  const candidates = song() ? analysis.transition_suggestions || [] : [];
+  get('suggestions').hidden = !candidates.length;
+  get('suggestion-list').replaceChildren();
+  for (const candidate of candidates) {
+    const jump = document.createElement('button');
+    jump.textContent = candidate.time.toFixed(2) + ' s';
+    jump.title = candidate.dominant_change === 'attacks' ? 'Contraste de ataques' : 'Contraste de espectro';
+    jump.onclick = () => {
+      player.currentTime = candidate.time;
+      const start = Math.max(0, candidate.time - 5);
+      get('from').value = start;
+      get('to').value = Math.min(analysis.duration || start + 10, start + 10);
+      draw();
+    };
+    get('suggestion-list').append(jump);
+  }
+  values().forEach((item, index) => {
+    const row = document.createElement('div');
+    if (song()) {
+      row.append((rhythmNames[item.rhythm] || item.rhythm) + ' (s)', field('number', item.start_time, null, value => {
+        item.start_time = value === '' ? null : Number(value);
+      }));
+      const here = document.createElement('button');
+      here.textContent = 'Usar cursor';
+      here.onclick = () => { item.start_time = Number(nearestBeat(player.currentTime).toFixed(3)); rows(); };
+      row.append(here);
+      if (lessons.some(lesson => lesson.rhythm === item.rhythm)) {
+        const compareButton = document.createElement('button');
+        compareButton.textContent = 'Comparar levada';
+        compareButton.onclick = () => compare(index);
+        row.append(compareButton);
+      }
+    } else {
+      row.append('Pulso', field('number', item.beat, null, v => item.beat = Number(v)),
+        field('', item.hand, ['unknown','left','right'], v => item.hand = v),
+        field('', String(item.accent), ['null','true','false'], v => item.accent = JSON.parse(v)),
+        field('', item.technique || 'unknown', ['unknown','stroke','roll','fill','call','muted','open'], v => item.technique = v));
+      const remove = document.createElement('button');
+      remove.textContent = 'Remover';
+      remove.onclick = () => { map.notes.splice(index, 1); rows(); };
+      row.append(remove);
+      if (activeLesson) {
+        const frames = document.createElement('button');
+        frames.textContent = 'Ver quadros';
+        frames.onclick = () => showFrames(item);
+        row.append(frames);
+        const observation = document.createElement('small');
+        observation.className = 'stroke-observation';
+        observation.dataset.note = String(index);
+        row.append(observation);
+      }
+    }
+    get('rows').append(row);
+  });
+  draw();
+}
+for (const id of ['analysis','map']) get(id).onchange = async event => {
+  try {
+    const value = JSON.parse(await event.target.files[0].text());
+    if (id === 'analysis') {
+      analysis = value;
+      if (value.bpm > 0) get('bpm').value = value.bpm;
+    } else {
+      if (!Array.isArray(value.notes) && !Array.isArray(value.rhythm_sequence)) throw new Error('Formato de mapa inválido');
+      closeComparison();
+      closeFrames();
+      activeLesson = '';
+      map = value;
+      if (value.loop_beats) get('loop').value = value.loop_beats;
+      if (value.reference_bpm) get('bpm').value = value.reference_bpm;
+      if (value.reference_start_time != null) {
+        get('from').value = value.reference_start_time;
+        get('to').value = value.reference_start_time + num('loop') * pulse();
+      }
+      if (value.bpm) get('bpm').value = value.bpm;
+      if (value.time_signature) get('meter').value = value.time_signature.join('/');
+      get('approve').checked = value.validation_status === 'approved';
+    }
+    rows();
+  } catch (error) { get('status').textContent = error.message; }
+};
+get('media').onchange = event => {
+  if (url) URL.revokeObjectURL(url);
+  url = URL.createObjectURL(event.target.files[0]);
+  player.src = url;
+};
+player.ontimeupdate = () => {
+  if (get('repeat').checked && player.currentTime >= num('to')) player.currentTime = num('from');
+  draw();
+};
+canvas.onclick = event => {
+  const box = canvas.getBoundingClientRect();
+  player.currentTime = num('from') + (event.clientX - box.left) / box.width * (num('to') - num('from'));
+};
+const toNote = (time, velocity) => ({beat: (time - num('from')) / pulse(),
+  hand: 'unknown', accent: null, technique: 'unknown', velocity});
+get('add').onclick = () => { map.notes.push(toNote(player.currentTime, .7)); rows(); };
+get('suggest').onclick = () => {
+  const end = num('from') + num('loop') * pulse();
+  map.notes.push(...(analysis.attacks || []).filter(a => a.time >= num('from') && a.time < end)
+    .map(a => toNote(a.time, a.strength)));
+  rows();
+};
+function prepareExport(approved) {
+  if (song()) {
+    const times = values().map(item => item.start_time);
+    if (approved && (!times.length || times.some((t, i) => !Number.isFinite(t) || t < 0 || t >= map.duration || (i && t <= times[i - 1])))) {
+      get('status').textContent = 'Revise a origem, os limites e a ordem das transições.'; return;
+    }
+    map.bpm = num('bpm');
+  } else {
+    map = {...map, schema_version: 1, id: map.id || 'rascunho', instrument: map.instrument || 'caixa',
+      rhythm: map.rhythm || 'unknown', difficulty: map.difficulty || 'unspecified',
+      loop_beats: num('loop'), time_signature: get('meter').value.split('/').map(Number),
+      reference_start_time: num('from'), reference_bpm: num('bpm')};
+    map.notes.sort((a, b) => a.beat - b.beat);
+    if (analysis.sha256) map.reference_sha256 = analysis.sha256;
+    if (approved && (!map.time_signature.every(v => v > 0) || !map.notes.length || map.rhythm === 'unknown' || map.notes.some(n =>
+      n.beat < 0 || n.beat >= map.loop_beats || n.hand === 'unknown' || n.accent === null || n.technique === 'unknown'))) {
+      get('status').textContent = 'Preencha as mãos, os acentos, as técnicas e as posições dentro do loop.'; return;
+    }
+  }
+  map.validation_status = approved ? 'approved' : 'draft';
+  return true;
+}
+get('export').onclick = () => {
+  if (!prepareExport(get('approve').checked)) return;
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([JSON.stringify(map, null, 2)], {type:'application/json'}));
+  link.download = (map.id || 'mapa') + '.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+};
+if (location.pathname === '/__bloco/editor') {
+  const songList = get('catalog-song');
+  const lessonList = get('catalog-lesson');
+  get('catalog-control').hidden = false;
+  fetch('/__bloco/catalogo.json').then(response => response.json()).then(catalog => {
+    catalog.songs.filter(item => item.source_available && item.analysis).forEach(item => {
+      songList.add(new Option(item.title, item.id));
+    });
+    const requested = new URLSearchParams(location.search).get('musica');
+    if (requested && [...songList.options].some(option => option.value === requested)) {
+      songList.value = requested;
+      songList.onchange();
+    }
+  }).catch(() => { get('status').textContent = 'Catálogo local indisponível.'; });
+  get('lesson-control').hidden = false;
+  fetch('/__bloco/levadas.json').then(response => response.json()).then(items => {
+    lessons = items;
+    lessons.sort((a, b) => a.instrument.localeCompare(b.instrument) || a.title.localeCompare(b.title));
+    for (const item of lessons) {
+      const suffix = item.status === 'approved' ? ' · aprovado' : '';
+      lessonList.add(new Option(item.title + suffix, item.id));
+    }
+    rows();
+  }).catch(() => { get('status').textContent = 'Referências de levada indisponíveis.'; });
+  lessonList.onchange = async () => {
+    const ident = lessonList.value;
+    closeComparison();
+    closeFrames();
+    activeLesson = '';
+    get('save-review').hidden = true;
+    get('save-draft').hidden = true;
+    if (!ident) return;
+    songList.value = '';
+    try {
+      const response = await fetch('/__bloco/levadas/' + encodeURIComponent(ident));
+      if (!response.ok) throw new Error('Vídeo ou análise indisponível.');
+      const bundle = await response.json();
+      if (lessonList.value !== ident) return;
+      activeLesson = ident;
+      map = bundle.manifest;
+      analysis = bundle.analysis;
+      if (url) URL.revokeObjectURL(url);
+      url = undefined;
+      player.src = bundle.audio;
+      const start = map.reference_start_time || 0;
+      get('bpm').value = map.reference_bpm || analysis.bpm || 112;
+      get('loop').value = map.loop_beats || 4;
+      get('meter').value = map.time_signature?.join('/') || '';
+      get('from').value = start;
+      get('to').value = Math.min(analysis.duration, start + num('loop') * pulse());
+      player.onloadedmetadata = () => { player.currentTime = start; };
+      get('approve').checked = map.validation_status === 'approved';
+      get('status').textContent = map.draft_loaded ? 'Rascunho local recuperado.' : '';
+      get('save-draft').hidden = false;
+      get('save-review').hidden = false;
+      rows();
+    } catch (error) { get('status').textContent = error.message; }
+  };
+  songList.onchange = async () => {
+    const ident = songList.value;
+    closeComparison();
+    closeFrames();
+    activeLesson = '';
+    get('save-review').hidden = true;
+    get('save-draft').hidden = true;
+    if (!ident) return;
+    lessonList.value = '';
+    try {
+      const response = await fetch('/__bloco/revisao/' + encodeURIComponent(ident));
+      if (!response.ok) throw new Error('Gravação ou análise indisponível.');
+      const bundle = await response.json();
+      if (songList.value !== ident) return;
+      map = bundle.manifest;
+      analysis = bundle.analysis;
+      if (url) URL.revokeObjectURL(url);
+      url = undefined;
+      player.onloadedmetadata = null;
+      player.src = bundle.audio;
+      get('bpm').value = analysis.bpm || 112;
+      get('from').value = 0;
+      get('to').value = analysis.duration;
+      get('approve').checked = map.validation_status === 'approved';
+      get('status').textContent = map.draft_loaded ? 'Rascunho local recuperado.' : '';
+      get('save-draft').hidden = false;
+      get('save-review').hidden = false;
+      rows();
+    } catch (error) { get('status').textContent = error.message; }
+  };
+  get('save-draft').onclick = async () => {
+    if (!prepareExport(false)) return;
+    get('approve').checked = false;
+    try {
+      const response = await fetch('/__bloco/rascunho', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(map)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Falha ao salvar o rascunho.');
+      get('status').textContent = 'Rascunho salvo. Reabra esta referência para continuar a revisão.';
+    } catch (error) { get('status').textContent = error.message; }
+  };
+  get('save-review').onclick = async () => {
+    if (!get('approve').checked) {
+      get('status').textContent = 'Marque Revisado e aprovado antes de salvar.';
+      return;
+    }
+    if (!prepareExport(true)) return;
+    try {
+      const response = await fetch(song() ? '/__bloco/revisao' : '/__bloco/levadas', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(map)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Falha ao salvar.');
+      get('status').textContent = 'Revisão salva. Reabra o jogo local para carregar os novos tempos.';
+    } catch (error) { get('status').textContent = error.message; }
+  };
+}
+for (const id of ['from','to','bpm','loop']) get(id).oninput = draw;
+rows();
+</script>
+</html>
